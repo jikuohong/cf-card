@@ -307,7 +307,7 @@ tfoot td{background:rgba(212,175,55,.07);border-top:1px solid var(--border2);bor
 <script>
 // ── 配置 ────────────────────────────────────────────────────────────────────
 // 部署后将此处替换为你的 Cloudflare Worker 域名
-const BASE_URL = 'https://card.kont.us.ci';
+const BASE_URL = 'https://YOUR_WORKER_NAME.YOUR_SUBDOMAIN.workers.dev';
 
 // ── 状态 ────────────────────────────────────────────────────────────────────
 let token = localStorage.getItem('ccm_token') || '';
@@ -376,7 +376,7 @@ function initDashboard() {
 // ── 数据 ────────────────────────────────────────────────────────────────────
 async function loadCards() {
   try {
-    cards = await api('/api/cards');
+    cards = (await api('/api/cards')).map(normCard);
     renderTable();
     renderStats();
   } catch(e) {
@@ -389,18 +389,70 @@ async function loadCards() {
 const fmt = n => n != null ? '¥' + Number(n).toLocaleString('zh-CN', {minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
 const fmtShort = n => n != null ? '¥' + Number(n).toLocaleString('zh-CN', {maximumFractionDigits:0}) : '—';
 
+// ── 前端数据标准化（兼容旧版 KV 数据）──────────────────────────────────────
+const BANK_ALIASES = {
+  '工商银行':['ICBC','icbc','工行'],
+  '建设银行':['CCB','ccb','建行'],
+  '招商银行':['CMB','cmb','招行'],
+  '浦发银行':['SPDB','spdb','SPD','SPDBCCC','浦发'],
+  '中国银行':['BOC','boc','中行'],
+  '农业银行':['ABC','农行'],
+  '交通银行':['BOCOM','交行'],
+  '民生银行':['CMBC','民生'],
+  '光大银行':['CEB','光大'],
+  '广发银行':['GDB','CGB','广发'],
+  '平安银行':['PAB','平安'],
+  '兴业银行':['CIB','兴业'],
+  '邮储银行':['PSBC','邮储'],
+};
+
+function normBankName(raw) {
+  if (!raw) return raw;
+  for (const [std] of Object.entries(BANK_ALIASES)) {
+    if (raw.includes(std)) return std;
+  }
+  for (const [std, aliases] of Object.entries(BANK_ALIASES)) {
+    if (aliases.some(a => raw.toUpperCase().includes(a.toUpperCase()))) return std;
+  }
+  return raw;
+}
+
+function normDate(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  let m = s.match(/^\d{4}[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+  m = s.match(/^(\d{1,2})[-/](\d{1,2})$/);
+  if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+  m = s.match(/(\d{1,2})月(\d{1,2})日/);
+  if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+  return s;
+}
+
+function normCard(c) {
+  return {
+    ...c,
+    bankName:        normBankName(c.bankName),
+    billingDate:     normDate(c.billingDate),
+    paymentDueDate:  normDate(c.paymentDueDate),
+    statementAmount: c.statementAmount != null ? Math.abs(c.statementAmount) : null,
+    minPayment:      c.minPayment      != null ? Math.abs(c.minPayment)      : null,
+    creditLimit:     c.creditLimit     != null ? Math.abs(c.creditLimit)     : null,
+    usedAmount:      c.usedAmount      != null ? Math.abs(c.usedAmount)      : null,
+    availableAmount: c.availableAmount != null ? Math.abs(c.availableAmount) : null,
+    unbilledAmount:  c.unbilledAmount  != null ? Math.abs(c.unbilledAmount)  : null,
+  };
+}
+
 function daysUntil(mmdd) {
-  if (!mmdd) return null;
-  const parts = mmdd.split('-');
-  if (parts.length < 2) return null;
-  // 兼容旧数据中可能存有年份的格式 YYYY-MM-DD → 取后两段
-  const [mm, dd] = parts.length === 3
-    ? [parseInt(parts[1]), parseInt(parts[2])]
-    : [parseInt(parts[0]), parseInt(parts[1])];
+  const d = normDate(mmdd);
+  if (!d) return null;
+  const parts = d.split('-');
+  if (parts.length !== 2) return null;
+  const [mm, dd] = parts.map(Number);
   if (isNaN(mm) || isNaN(dd) || mm > 12 || mm < 1) return null;
   const now = new Date();
   let due = new Date(now.getFullYear(), mm - 1, dd);
-  // 如果今年这个日期已过，算明年
   if (due < now) due.setFullYear(due.getFullYear() + 1);
   return Math.ceil((due - now) / 86400000);
 }
@@ -528,7 +580,7 @@ async function autoParseEmail(text) {
   setParseStatus('parsing', 'AI 正在分析账单信息…', true);
   try {
     const card = await api('/api/parse', 'POST', { emailText: text });
-    cards = await api('/api/cards');
+    cards = (await api('/api/cards')).map(normCard);
     renderTable(card.id);
     renderStats();
     document.getElementById('email-input').value = '';
@@ -625,11 +677,11 @@ async function saveCard() {
   });
   try {
     if (editingId) {
-      const updated = await api('/api/cards/' + editingId, 'PUT', data);
+      const updated = normCard(await api('/api/cards/' + editingId, 'PUT', data));
       const idx = cards.findIndex(c => c.id === editingId);
       if (idx >= 0) cards[idx] = updated;
     } else {
-      const card = await api('/api/cards', 'POST', data);
+      const card = normCard(await api('/api/cards', 'POST', data));
       cards.push(card);
     }
     renderTable(editingId || data.id);
