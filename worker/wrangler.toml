@@ -1,0 +1,22 @@
+name = "credit-card-manager"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# KV 命名空间 - 部署前请将 id 替换为你的实际 KV ID
+kv_namespaces = [
+  { binding = "CREDIT_CARD_KV", id = "YOUR_KV_NAMESPACE_ID_HERE" }
+]
+
+# Cloudflare AI 绑定
+[ai]
+binding = "AI"
+
+# Cron 触发器 - 每天北京时间 9:00 推送提醒（UTC+8，即 UTC 01:00）
+[triggers]
+crons = ["0 1 * * *"]
+
+# 路由（部署后替换为你的域名）
+# [[routes]]
+# pattern = "bills.your-domain.com/*"
+# zone_name = "your-domain.com"
