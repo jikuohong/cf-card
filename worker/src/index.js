@@ -178,7 +178,10 @@ function regexParse(text) {
   const num = (patterns) => {
     for (const p of (Array.isArray(patterns) ? patterns : [patterns])) {
       const m = text.match(p);
-      if (m) return parseFloat(m[1].replace(/,/g, ''));
+      if (m) {
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        return Math.abs(v); // 金额统一取正数
+      }
     }
     return null;
   };
@@ -208,45 +211,35 @@ function regexParse(text) {
     return null;
   })();
 
-  // 账单日 - 支持"对账单生成日"、"账单日"、"账单周期结束日"
-  const billingDate = (() => {
-    const patterns = [
-      /(?:对账单生成日|账单日|账单生成日)[：:\s]*(\d{4})年(\d{1,2})月(\d{1,2})日/,
-      /账单日[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/,
-      /账单日[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
-      // 账单周期末尾日期: "2026年02月01日—2026年02月28日" 取后面的日期
-      /账单周期[\s\S]{0,30}?—(\d{4})年(\d{1,2})月(\d{1,2})日/,
-    ];
+  // 统一日期提取：始终只返回 MM-DD 格式，绝不包含年份
+  const extractDate = (patterns) => {
     for (const p of patterns) {
       const m = text.match(p);
-      if (m) {
-        // 有年份的格式 (3个捕获组)
-        if (m.length >= 4 && m[3]) return m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
-        // 无年份的格式 (2个捕获组)
-        if (m[1] && m[2]) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
-      }
+      if (!m) continue;
+      // 带年份：年(\d{4}) 月(\d{1,2}) 日(\d{1,2}) → 取后两组
+      if (m[3] !== undefined) return m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
+      // 不带年份：月(\d{1,2}) 日/- (\d{1,2})
+      if (m[1] && m[2]) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
     }
     return null;
-  })();
+  };
 
-  // 还款截止日 - 支持"贷记卡到期还款日"、"还款截止日"、"最后还款日"
-  const paymentDueDate = (() => {
-    const patterns = [
-      /(?:贷记卡到期还款日|到期还款日|还款截止日|最后还款日|还款到期日)[：:\s]*(\d{4})年(\d{1,2})月(\d{1,2})日/,
-      /(?:还款截止日|最后还款日|到期还款日)[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
-    ];
-    for (const p of patterns) {
-      const m = text.match(p);
-      if (m) {
-        if (m.length >= 4 && m[3]) return m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
-        if (m[1] && m[2]) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
-      }
-    }
-    return null;
-  })();
+  // 账单日
+  const billingDate = extractDate([
+    /(?:对账单生成日|账单日|账单生成日)[：:\s]*\d{4}年(\d{1,2})月(\d{1,2})日/,
+    /账单周期[\s\S]{0,40}?—\d{4}年(\d{1,2})月(\d{1,2})日/,
+    /账单日[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
+  ]);
+
+  // 还款截止日
+  const paymentDueDate = extractDate([
+    /(?:贷记卡到期还款日|到期还款日|还款截止日|最后还款日|还款到期日)[：:\s]*\d{4}年(\d{1,2})月(\d{1,2})日/,
+    /(?:还款截止日|最后还款日|到期还款日)[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
+  ]);
 
   // 工行表格行解析：1071(牡丹贷记卡)  3,335.14/RMB  333.51/RMB  10,000.00/RMB
-  const icbcRow = text.match(/(\d{4})[（(][^)）]*[)）]\s+([\d,]+\.\d{2})\/RMB\s+([\d,]+\.\d{2})\/RMB\s+([\d,]+\.\d{2})\/RMB/);
+  // 只匹配正数（排除本期余额等负数列）
+  const icbcRow = text.match(/(\d{4})[（(][^)）]+[)）]\s+([\d,]+\.\d{2})\/RMB\s+([\d,]+\.\d{2})\/RMB\s+([\d,]+\.\d{2})\/RMB/);
 
   const statementAmount = (() => {
     if (icbcRow) return parseFloat(icbcRow[2].replace(/,/g,''));
