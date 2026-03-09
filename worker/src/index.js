@@ -193,47 +193,96 @@ function regexParse(text) {
   const banks = ['工商银行','建设银行','招商银行','浦发银行','中国银行','农业银行','交通银行','民生银行','光大银行','广发银行','平安银行','兴业银行','华夏银行','北京银行','中信银行'];
   const bankName = banks.find(b => text.includes(b)) || null;
 
-  // 账单日
-  const billingRaw = str([
-    /账单日[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/,
-    /账单日[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
-  ]);
-  const billingDate = (() => {
-    const m = text.match(/账单日[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/);
-    if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
-    const m2 = text.match(/账单日[：:]\s*(\d{1,2})[月/-](\d{1,2})/);
-    if (m2) return m2[1].padStart(2,'0') + '-' + m2[2].padStart(2,'0');
-    return null;
-  })();
-
-  // 还款截止日
-  const paymentDueDate = (() => {
+  // 卡号后四位 - 支持表格形式 "1071(牡丹贷记卡)" 和 "(尾号1234)"
+  const cardLast4 = (() => {
     const patterns = [
-      /(?:还款截止日|最后还款日|到期还款日|还款到期日)[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/,
-      /(?:还款截止日|最后还款日|到期还款日)[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
+      /[（(](?:尾号|末四位)[：:\s]*(\d{4})[）)]/,
+      /卡号后四位[\s\S]{0,20}?(\d{4})/,
+      /^(\d{4})[（(]/m,
+      /---主卡明细---[\s\S]{0,50}?^(\d{4})\b/m,
     ];
     for (const p of patterns) {
       const m = text.match(p);
-      if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+      if (m) return m[1];
     }
     return null;
   })();
 
-  return {
-    bankName,
-    cardLast4: str(/[（(](?:尾号|末四位)[：:\s]*(\d{4})[）)]/),
-    billingDate,
-    paymentDueDate,
-    statementAmount: num([
+  // 账单日 - 支持"对账单生成日"、"账单日"、"账单周期结束日"
+  const billingDate = (() => {
+    const patterns = [
+      /(?:对账单生成日|账单日|账单生成日)[：:\s]*(\d{4})年(\d{1,2})月(\d{1,2})日/,
+      /账单日[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/,
+      /账单日[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
+      // 账单周期末尾日期: "2026年02月01日—2026年02月28日" 取后面的日期
+      /账单周期[\s\S]{0,30}?—(\d{4})年(\d{1,2})月(\d{1,2})日/,
+    ];
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (m) {
+        // 有年份的格式 (3个捕获组)
+        if (m.length >= 4 && m[3]) return m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
+        // 无年份的格式 (2个捕获组)
+        if (m[1] && m[2]) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+      }
+    }
+    return null;
+  })();
+
+  // 还款截止日 - 支持"贷记卡到期还款日"、"还款截止日"、"最后还款日"
+  const paymentDueDate = (() => {
+    const patterns = [
+      /(?:贷记卡到期还款日|到期还款日|还款截止日|最后还款日|还款到期日)[：:\s]*(\d{4})年(\d{1,2})月(\d{1,2})日/,
+      /(?:还款截止日|最后还款日|到期还款日)[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
+    ];
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (m) {
+        if (m.length >= 4 && m[3]) return m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
+        if (m[1] && m[2]) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+      }
+    }
+    return null;
+  })();
+
+  // 工行表格行解析：1071(牡丹贷记卡)  3,335.14/RMB  333.51/RMB  10,000.00/RMB
+  const icbcRow = text.match(/(\d{4})[（(][^)）]*[)）]\s+([\d,]+\.\d{2})\/RMB\s+([\d,]+\.\d{2})\/RMB\s+([\d,]+\.\d{2})\/RMB/);
+
+  const statementAmount = (() => {
+    if (icbcRow) return parseFloat(icbcRow[2].replace(/,/g,''));
+    return num([
       /(?:本期账单金额|本期应还金额|应还金额|账单金额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
       /应还总额[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
-    ]),
-    minPayment: num(/最低还款额?[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
-    creditLimit: num([
+      /应还款额[\s\S]{0,100}?([\d,]+\.\d{2})\/RMB/,
+    ]);
+  })();
+
+  const minPayment = (() => {
+    if (icbcRow) return parseFloat(icbcRow[3].replace(/,/g,''));
+    return num([
+      /最低还款额?[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
+    ]);
+  })();
+
+  const creditLimit = (() => {
+    if (icbcRow) return parseFloat(icbcRow[4].replace(/,/g,''));
+    return num([
       /(?:信用额度|授信额度|信用限额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
-    ]),
+      /信用额度[\s\S]{0,100}?([\d,]+\.\d{2})\/RMB/,
+    ]);
+  })();
+
+  return {
+    bankName,
+    cardLast4,
+    billingDate,
+    paymentDueDate,
+    statementAmount,
+    minPayment,
+    creditLimit,
     usedAmount: num([
       /(?:已用额度|本期消费|消费总额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
+      /本期支出[\s\S]{0,50}?([\d,]+\.\d{2})\/RMB/,
     ]),
     availableAmount: num(/可用额度[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
     unbilledAmount: num([
