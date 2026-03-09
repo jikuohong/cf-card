@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>信用卡账单管理</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg:       #070d1a;
+  --bg2:      #0c1424;
+  --bg3:      rgba(255,255,255,.025);
+  --border:   rgba(212,175,55,.12);
+  --border2:  rgba(212,175,55,.22);
+  --gold:     #f0d060;
+  --gold2:    #c9a227;
+  --gold3:    rgba(212,175,55,.08);
+  --text:     #e2d5bc;
+  --muted:    #6b5428;
+  --muted2:   #3a2e18;
+  --red:      #f87171;
+  --blue:     #60a5fa;
+  --green:    #4ade80;
+  --yellow:   #fbbf24;
+  --r:        6px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Noto Serif SC',Georgia,serif;min-height:100vh}
+
+/* ── scrollbar ── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:rgba(212,175,55,.2);border-radius:3px}
+
+/* ── layout ── */
+#app{display:flex;flex-direction:column;min-height:100vh}
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:16px 28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.header-left .sub{font-size:9px;letter-spacing:5px;color:var(--muted);margin-bottom:4px}
+.header-left h1{font-size:20px;font-weight:700;letter-spacing:3px;color:var(--gold)}
+.header-right{display:flex;gap:8px;align-items:center}
+main{flex:1;padding:22px 28px;max-width:1400px;width:100%;margin:0 auto}
+
+/* ── buttons ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:4px;border:none;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:600;letter-spacing:.5px;transition:all .18s}
+.btn-gold{background:linear-gradient(135deg,#b8860b,#f0c040,#b8860b);color:#070d1a}
+.btn-gold:hover{opacity:.88;transform:translateY(-1px)}
+.btn-ghost{background:transparent;color:var(--gold2);border:1px solid rgba(201,162,39,.3)}
+.btn-ghost:hover{background:rgba(201,162,39,.08);border-color:rgba(201,162,39,.55)}
+.btn-danger{background:transparent;color:var(--red);border:1px solid rgba(248,113,113,.3)}
+.btn-danger:hover{background:rgba(248,113,113,.08)}
+.btn-sm{padding:5px 11px;font-size:11.5px}
+.btn:disabled{opacity:.35;cursor:not-allowed;transform:none!important}
+
+/* ── toast ── */
+#toast{position:fixed;bottom:28px;right:28px;display:flex;flex-direction:column;gap:8px;z-index:999}
+.toast-item{padding:10px 16px;border-radius:5px;font-size:13px;animation:slideUp .2s ease;box-shadow:0 4px 20px rgba(0,0,0,.5)}
+.toast-ok{background:#052e16;border:1px solid rgba(74,222,128,.3);color:var(--green)}
+.toast-err{background:#2d0f0f;border:1px solid rgba(248,113,113,.3);color:var(--red)}
+.toast-info{background:#0f1e38;border:1px solid rgba(96,165,250,.3);color:var(--blue)}
+@keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── stats grid ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:18px}
+.stat-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:12px 15px}
+.stat-card .label{font-size:9.5px;letter-spacing:1.8px;color:var(--muted);margin-bottom:6px;text-transform:uppercase}
+.stat-card .value{font-size:18px;font-weight:700}
+
+/* ── section card ── */
+.section{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);margin-bottom:18px;overflow:hidden}
+.section-header{padding:13px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.section-title{font-size:11px;letter-spacing:2px;color:var(--gold2);text-transform:uppercase}
+.section-body{padding:18px}
+
+/* ── textarea ── */
+textarea,input[type=text],input[type=password],input[type=number]{width:100%;background:rgba(255,255,255,.03);border:1px solid var(--border2);border-radius:4px;color:var(--text);padding:9px 12px;font-family:'JetBrains Mono',monospace;font-size:12.5px;resize:vertical;outline:none;line-height:1.6;transition:border-color .2s,box-shadow .2s}
+textarea:focus,input:focus{border-color:rgba(212,175,55,.5);box-shadow:0 0 0 3px rgba(212,175,55,.07)}
+textarea::placeholder,input::placeholder{color:var(--muted2)}
+label{display:block;font-size:10.5px;color:var(--muted);letter-spacing:1.5px;margin-bottom:6px}
+
+/* ── table ── */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{background:rgba(212,175,55,.07);color:var(--gold2);font-size:10px;letter-spacing:2px;padding:10px 13px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;font-weight:700;text-transform:uppercase}
+td{padding:12px 13px;border-bottom:1px solid rgba(255,255,255,.03);font-size:13.5px;vertical-align:middle}
+tr:hover td{background:rgba(212,175,55,.03)}
+tfoot td{background:rgba(212,175,55,.07);border-top:1px solid var(--border2);border-bottom:none;font-weight:700;color:var(--gold);font-size:13px}
+.bar-bg{height:4px;background:rgba(255,255,255,.07);border-radius:2px;margin-top:4px;overflow:hidden;width:64px}
+.bar-fill{height:100%;border-radius:2px;transition:width .5s ease}
+
+/* ── badge ── */
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.5px}
+.badge-red{background:rgba(248,113,113,.12);color:var(--red)}
+.badge-yellow{background:rgba(251,191,36,.12);color:var(--yellow)}
+.badge-green{background:rgba(74,222,128,.1);color:var(--green)}
+.badge-blue{background:rgba(96,165,250,.1);color:var(--blue)}
+
+/* ── modal ── */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn .15s ease}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal{background:#0e1828;border:1px solid var(--border2);border-radius:8px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;animation:scaleIn .15s ease}
+@keyframes scaleIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+.modal-header{padding:18px 22px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:14px;font-weight:600;color:var(--gold);letter-spacing:1px}
+.modal-body{padding:20px 22px}
+.modal-footer{padding:14px 22px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.form-group{display:flex;flex-direction:column;gap:0}
+.form-group.full{grid-column:1/-1}
+.close-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:2px 6px;transition:color .2s}
+.close-btn:hover{color:var(--text)}
+
+/* ── login ── */
+#login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-card{width:100%;max-width:360px;background:#0e1828;border:1px solid var(--border2);border-radius:10px;padding:36px 32px}
+.login-card .ornament{font-size:10px;letter-spacing:5px;color:var(--muted);margin-bottom:8px}
+.login-card h2{font-size:22px;font-weight:700;color:var(--gold);letter-spacing:3px;margin-bottom:24px}
+.login-form{display:flex;flex-direction:column;gap:14px}
+
+/* ── parse status ── */
+.parse-status{display:flex;align-items:center;gap:7px;font-size:12px;padding:7px 12px;border-radius:4px;margin-top:9px;animation:slideUp .2s ease}
+.ps-detecting{background:rgba(96,165,250,.07);border:1px solid rgba(96,165,250,.2);color:var(--blue)}
+.ps-parsing{background:rgba(240,208,96,.07);border:1px solid rgba(240,208,96,.2);color:var(--gold)}
+.ps-done{background:rgba(74,222,128,.07);border:1px solid rgba(74,222,128,.2);color:var(--green)}
+.ps-error{background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.2);color:var(--red)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{display:inline-block;animation:spin .7s linear infinite}
+
+/* ── days badge ── */
+.days-chip{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
+.dc-overdue{background:rgba(248,113,113,.15);color:var(--red)}
+.dc-urgent{background:rgba(251,191,36,.15);color:var(--yellow)}
+.dc-ok{background:rgba(74,222,128,.1);color:var(--green)}
+.dc-na{background:rgba(255,255,255,.06);color:var(--muted)}
+
+/* ── row animation ── */
+@keyframes rowIn{from{opacity:0;background:rgba(240,208,96,.08)}to{opacity:1;background:transparent}}
+.row-new{animation:rowIn .6s ease}
+
+/* ── empty state ── */
+.empty{text-align:center;padding:52px 0;color:var(--muted2)}
+.empty-icon{font-size:26px;opacity:.15;margin-bottom:10px}
+.empty-text{font-size:13px;letter-spacing:1.5px}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ LOGIN ═══════════════════ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="ornament">◆ CREDIT CARD MANAGER ◆</div>
+    <h2>账单管理中心</h2>
+    <div class="login-form">
+      <div>
+        <label>管理员密码</label>
+        <input type="password" id="pwd-input" placeholder="输入密码" autocomplete="current-password"/>
+      </div>
+      <button class="btn btn-gold" id="login-btn" onclick="doLogin()">登录</button>
+      <div id="login-err" style="font-size:12px;color:var(--red);display:none"></div>
+    </div>
+    <div style="margin-top:20px;font-size:11px;color:var(--muted2);line-height:1.7">
+      ✦ 由 Cloudflare Worker + KV + AI 驱动<br/>
+      ✦ 支持邮件自动解析 · 每日 TG 推送
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ DASHBOARD ═══════════════════ -->
+<div id="app" style="display:none">
+  <header>
+    <div class="header-left">
+      <div class="sub">◆ CREDIT CARD MANAGER ◆</div>
+      <h1>信用卡账单管理中心</h1>
+    </div>
+    <div class="header-right">
+      <button class="btn btn-ghost btn-sm" onclick="triggerPush()" id="push-btn">📬 发送TG提醒</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadCards()">↻ 刷新</button>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">退出</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Stats -->
+    <div class="stats-grid" id="stats-grid">
+      <div class="stat-card"><div class="label">卡片数量</div><div class="value" id="s-count" style="color:var(--text)">—</div></div>
+      <div class="stat-card"><div class="label">本期应还合计</div><div class="value" id="s-total" style="color:var(--gold)">—</div></div>
+      <div class="stat-card"><div class="label">最低还款合计</div><div class="value" id="s-min" style="color:var(--yellow)">—</div></div>
+      <div class="stat-card"><div class="label">未出账单合计</div><div class="value" id="s-unbilled" style="color:var(--blue)">—</div></div>
+      <div class="stat-card"><div class="label">可用额度合计</div><div class="value" id="s-avail" style="color:var(--green)">—</div></div>
+      <div class="stat-card"><div class="label">整体使用率</div><div class="value" id="s-rate">—</div></div>
+    </div>
+
+    <!-- Parse email -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">◈ 粘贴邮件自动解析录入</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadSample(0)">示例：工商银行</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadSample(1)">示例：建设银行</button>
+        </div>
+      </div>
+      <div class="section-body">
+        <textarea id="email-input" rows="6"
+          placeholder="将银行账单邮件粘贴到此处，系统将自动识别并录入到下方表格&#10;&#10;支持工商银行、建设银行、招商银行、浦发银行等各大银行"
+          onpaste="onEmailPaste(event)"></textarea>
+        <div id="parse-status" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">◈ 账单总览</span>
+        <button class="btn btn-gold btn-sm" onclick="openAddModal()">＋ 手动添加</button>
+      </div>
+      <div class="tbl-wrap">
+        <table id="cards-table">
+          <thead>
+            <tr>
+              <th>银行 / 卡号</th>
+              <th>账单日</th>
+              <th>还款截止日</th>
+              <th>距今</th>
+              <th>本期账单金额</th>
+              <th>最低还款额</th>
+              <th>未出账单消费</th>
+              <th>信用额度</th>
+              <th>已用额度</th>
+              <th>可用额度</th>
+              <th>使用率</th>
+              <th>来源</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="cards-tbody"></tbody>
+          <tfoot id="cards-tfoot"></tfoot>
+        </table>
+        <div class="empty" id="empty-state" style="display:none">
+          <div class="empty-icon">◈</div>
+          <div class="empty-text">暂无账单数据 · 粘贴邮件或手动添加</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ═══════════════════ EDIT / ADD MODAL ═══════════════════ -->
+<div class="overlay" id="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">编辑账单</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>银行名称</label>
+          <input type="text" id="f-bankName" placeholder="如：工商银行"/>
+        </div>
+        <div class="form-group">
+          <label>卡号后4位</label>
+          <input type="text" id="f-cardLast4" placeholder="如：6688" maxlength="4"/>
+        </div>
+        <div class="form-group">
+          <label>账单日（MM-DD）</label>
+          <input type="text" id="f-billingDate" placeholder="如：03-05"/>
+        </div>
+        <div class="form-group">
+          <label>还款截止日（MM-DD）</label>
+          <input type="text" id="f-paymentDueDate" placeholder="如：03-25"/>
+        </div>
+        <div class="form-group">
+          <label>本期账单金额 ¥</label>
+          <input type="number" id="f-statementAmount" placeholder="0.00" step="0.01"/>
+        </div>
+        <div class="form-group">
+          <label>最低还款额 ¥</label>
+          <input type="number" id="f-minPayment" placeholder="0.00" step="0.01"/>
+        </div>
+        <div class="form-group">
+          <label>信用额度 ¥</label>
+          <input type="number" id="f-creditLimit" placeholder="0.00" step="0.01"/>
+        </div>
+        <div class="form-group">
+          <label>已用额度 ¥</label>
+          <input type="number" id="f-usedAmount" placeholder="0.00" step="0.01"/>
+        </div>
+        <div class="form-group">
+          <label>可用额度 ¥</label>
+          <input type="number" id="f-availableAmount" placeholder="0.00" step="0.01"/>
+        </div>
+        <div class="form-group">
+          <label>未出账单消费 ¥</label>
+          <input type="number" id="f-unbilledAmount" placeholder="0.00" step="0.01"/>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">取消</button>
+      <button class="btn btn-gold" id="modal-save-btn" onclick="saveCard()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ TOAST ═══════════════════ -->
+<div id="toast"></div>
+
+<script>
+// ── 配置 ────────────────────────────────────────────────────────────────────
+// 部署后将此处替换为你的 Cloudflare Worker 域名
+const BASE_URL = 'https://YOUR_WORKER_NAME.YOUR_SUBDOMAIN.workers.dev';
+
+// ── 状态 ────────────────────────────────────────────────────────────────────
+let token = localStorage.getItem('ccm_token') || '';
+let cards = [];
+let editingId = null;
+let debounceTimer = null;
+
+// ── 初始化 ──────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  if (token) initDashboard();
+  document.getElementById('pwd-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+});
+
+// ── API ─────────────────────────────────────────────────────────────────────
+async function api(path, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(BASE_URL + path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── 登录 ────────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const pwd = document.getElementById('pwd-input').value.trim();
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('login-err');
+  if (!pwd) return;
+  btn.disabled = true; btn.textContent = '验证中…';
+  err.style.display = 'none';
+  try {
+    const data = await api('/api/login', 'POST', { password: pwd });
+    token = data.token;
+    localStorage.setItem('ccm_token', token);
+    initDashboard();
+  } catch(e) {
+    err.textContent = e.message;
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = '登录';
+  }
+}
+
+function logout() {
+  token = '';
+  localStorage.removeItem('ccm_token');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+function initDashboard() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  loadCards();
+}
+
+// ── 数据 ────────────────────────────────────────────────────────────────────
+async function loadCards() {
+  try {
+    cards = await api('/api/cards');
+    renderTable();
+    renderStats();
+  } catch(e) {
+    if (e.message.includes('401')) logout();
+    else toast(e.message, 'err');
+  }
+}
+
+// ── 格式化 ──────────────────────────────────────────────────────────────────
+const fmt = n => n != null ? '¥' + Number(n).toLocaleString('zh-CN', {minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+const fmtShort = n => n != null ? '¥' + Number(n).toLocaleString('zh-CN', {maximumFractionDigits:0}) : '—';
+
+function daysUntil(mmdd) {
+  if (!mmdd) return null;
+  const now = new Date();
+  const [mm, dd] = mmdd.split('-').map(Number);
+  if (isNaN(mm) || isNaN(dd)) return null;
+  let due = new Date(now.getFullYear(), mm - 1, dd);
+  if (due < now && now.getDate() > dd) due.setMonth(due.getMonth() + 1);
+  return Math.ceil((due - now) / 86400000);
+}
+
+function daysBadge(mmdd) {
+  const d = daysUntil(mmdd);
+  if (d === null) return '<span class="days-chip dc-na">—</span>';
+  if (d < 0) return `<span class="days-chip dc-overdue">逾期${Math.abs(d)}天</span>`;
+  if (d === 0) return `<span class="days-chip dc-urgent">今天到期</span>`;
+  if (d <= 3)  return `<span class="days-chip dc-urgent">${d}天后</span>`;
+  return `<span class="days-chip dc-ok">${d}天后</span>`;
+}
+
+function usageBar(card) {
+  if (!card.creditLimit || !card.usedAmount) return '—';
+  const rate = Math.round(card.usedAmount / card.creditLimit * 100);
+  const color = rate > 80 ? 'var(--red)' : rate > 50 ? 'var(--yellow)' : 'var(--green)';
+  return `<span style="color:${color};font-weight:700;font-size:13px">${rate}%</span>
+    <div class="bar-bg"><div class="bar-fill" style="width:${rate}%;background:${color}"></div></div>`;
+}
+
+// ── 渲染表格 ─────────────────────────────────────────────────────────────────
+function renderTable(newId = null) {
+  const tbody = document.getElementById('cards-tbody');
+  const tfoot = document.getElementById('cards-tfoot');
+  const empty = document.getElementById('empty-state');
+
+  if (!cards.length) {
+    tbody.innerHTML = '';
+    tfoot.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = cards.map(c => {
+    const isNew = c.id === newId;
+    const sourceLabel = c.source === 'email'
+      ? '<span class="badge badge-blue">邮件</span>'
+      : '<span class="badge" style="background:rgba(255,255,255,.06);color:var(--muted)">手动</span>';
+
+    return `<tr class="${isNew ? 'row-new' : ''}">
+      <td>
+        <div style="font-weight:600;color:var(--gold);font-size:14px">${esc(c.bankName || '未知银行')}</div>
+        ${c.cardLast4 ? `<div style="font-size:10.5px;color:var(--muted);margin-top:2px;letter-spacing:2px">•••• ${esc(c.cardLast4)}</div>` : ''}
+      </td>
+      <td><span style="color:var(--gold2);font-weight:600">${c.billingDate || '—'}</span></td>
+      <td><span style="color:var(--red);font-weight:600">${c.paymentDueDate || '—'}</span></td>
+      <td>${daysBadge(c.paymentDueDate)}</td>
+      <td><span style="color:var(--gold);font-weight:700;font-size:15px">${fmt(c.statementAmount)}</span></td>
+      <td><span style="color:#9ca3af">${fmt(c.minPayment)}</span></td>
+      <td><span style="color:var(--blue);font-weight:600">${fmt(c.unbilledAmount)}</span></td>
+      <td><span style="color:#6b7280">${fmt(c.creditLimit)}</span></td>
+      <td>${fmt(c.usedAmount)}</td>
+      <td><span style="color:var(--green);font-weight:600">${fmt(c.availableAmount)}</span></td>
+      <td>${usageBar(c)}</td>
+      <td>${sourceLabel}</td>
+      <td>
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-ghost btn-sm" onclick="openEditModal('${c.id}')">编辑</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCard('${c.id}')">删除</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Footer totals
+  if (cards.length > 1) {
+    const totals = {
+      statement: cards.reduce((s, c) => s + (c.statementAmount || 0), 0),
+      min:       cards.reduce((s, c) => s + (c.minPayment || 0), 0),
+      unbilled:  cards.reduce((s, c) => s + (c.unbilledAmount || 0), 0),
+      credit:    cards.reduce((s, c) => s + (c.creditLimit || 0), 0),
+      used:      cards.reduce((s, c) => s + (c.usedAmount || 0), 0),
+      avail:     cards.reduce((s, c) => s + (c.availableAmount || 0), 0),
+    };
+    const overallRate = totals.credit > 0 ? Math.round(totals.used / totals.credit * 100) : null;
+    const rc = overallRate > 80 ? 'var(--red)' : overallRate > 50 ? 'var(--yellow)' : 'var(--green)';
+    tfoot.innerHTML = `<tr>
+      <td colspan="4" style="color:var(--gold2);font-size:10.5px;letter-spacing:1.5px">▶ 合计（${cards.length} 张卡）</td>
+      <td>${fmt(totals.statement)}</td>
+      <td style="color:#9ca3af">${fmt(totals.min)}</td>
+      <td style="color:var(--blue)">${fmt(totals.unbilled)}</td>
+      <td style="color:#6b7280">${fmt(totals.credit)}</td>
+      <td>${fmt(totals.used)}</td>
+      <td style="color:var(--green)">${fmt(totals.avail)}</td>
+      <td>${overallRate != null ? `<span style="color:${rc};font-weight:700">${overallRate}%</span><div class="bar-bg"><div class="bar-fill" style="width:${overallRate}%;background:${rc}"></div></div>` : '—'}</td>
+      <td colspan="2"></td>
+    </tr>`;
+  } else {
+    tfoot.innerHTML = '';
+  }
+}
+
+function renderStats() {
+  const total = cards.reduce((s, c) => s + (c.statementAmount || 0), 0);
+  const min   = cards.reduce((s, c) => s + (c.minPayment || 0), 0);
+  const unb   = cards.reduce((s, c) => s + (c.unbilledAmount || 0), 0);
+  const avail = cards.reduce((s, c) => s + (c.availableAmount || 0), 0);
+  const cr    = cards.reduce((s, c) => s + (c.creditLimit || 0), 0);
+  const us    = cards.reduce((s, c) => s + (c.usedAmount || 0), 0);
+  const rate  = cr > 0 ? Math.round(us / cr * 100) : null;
+  const rc    = rate > 80 ? 'var(--red)' : rate > 50 ? 'var(--yellow)' : 'var(--green)';
+
+  document.getElementById('s-count').textContent   = cards.length + ' 张';
+  document.getElementById('s-total').textContent   = fmtShort(total);
+  document.getElementById('s-min').textContent     = fmtShort(min);
+  document.getElementById('s-unbilled').textContent= fmtShort(unb);
+  document.getElementById('s-avail').textContent   = fmtShort(avail);
+  const rateEl = document.getElementById('s-rate');
+  rateEl.textContent = rate != null ? rate + '%' : '—';
+  rateEl.style.color = rate != null ? rc : 'var(--muted)';
+}
+
+// ── 邮件粘贴自动解析 ─────────────────────────────────────────────────────────
+function onEmailPaste(e) {
+  const text = e.clipboardData?.getData('text') || '';
+  if (!text.trim()) return;
+  setParseStatus('detecting', '检测到邮件内容，即将自动解析…');
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => autoParseEmail(text), 800);
+}
+
+async function autoParseEmail(text) {
+  setParseStatus('parsing', 'AI 正在分析账单信息…', true);
+  try {
+    const card = await api('/api/parse', 'POST', { emailText: text });
+    cards = await api('/api/cards');
+    renderTable(card.id);
+    renderStats();
+    document.getElementById('email-input').value = '';
+    setParseStatus('done', `✓ 已录入：${card.bankName || ''}${card.cardLast4 ? ' ····' + card.cardLast4 : ''}`);
+    setTimeout(() => setParseStatus('', ''), 4000);
+  } catch(e) {
+    setParseStatus('error', '⚠ ' + e.message);
+  }
+}
+
+function setParseStatus(type, text, spin = false) {
+  const el = document.getElementById('parse-status');
+  if (!type) { el.style.display = 'none'; return; }
+  const cls = { detecting:'ps-detecting', parsing:'ps-parsing', done:'ps-done', error:'ps-error' }[type] || '';
+  const icon = spin ? '<span class="spin">◌</span> ' : '';
+  el.className = `parse-status ${cls}`;
+  el.innerHTML = icon + esc(text);
+  el.style.display = 'flex';
+}
+
+// ── 示例邮件 ─────────────────────────────────────────────────────────────────
+const SAMPLES = [
+`发件人: service@icbc.com.cn
+主题: 工商银行信用卡账单通知
+
+尊敬的持卡人，您好！
+您的工商银行信用卡（尾号 6688）账单已生成：
+账单日：2025年3月5日
+还款截止日：2025年3月25日
+本期账单金额：¥3,256.80
+最低还款额：¥163.00
+信用额度：¥50,000.00
+已用额度：¥12,340.00
+可用额度：¥37,660.00
+未出账单消费：¥1,890.50`,
+
+`发件人: ccbill@ccb.com
+主题: 建设银行龙卡账单提醒
+
+您好，您的建设银行信用卡（尾号 4521）本月账单详情如下：
+账单日：2025年3月8日
+最后还款日：2025年3月28日
+本期应还金额：¥8,760.20
+最低还款额：¥438.00
+授信额度：¥80,000.00
+本期消费：¥8,760.20
+未出账消费：¥2,450.00
+可用额度：¥68,789.80`,
+];
+
+function loadSample(idx) {
+  const input = document.getElementById('email-input');
+  input.value = SAMPLES[idx];
+  setParseStatus('detecting', '检测到邮件内容，即将自动解析…');
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => autoParseEmail(SAMPLES[idx]), 600);
+}
+
+// ── 增删改 ───────────────────────────────────────────────────────────────────
+const FIELDS = ['bankName','cardLast4','billingDate','paymentDueDate','statementAmount','minPayment','creditLimit','usedAmount','availableAmount','unbilledAmount'];
+
+function openAddModal() {
+  editingId = null;
+  document.getElementById('modal-title').textContent = '手动添加账单';
+  FIELDS.forEach(f => document.getElementById('f-' + f).value = '');
+  document.getElementById('modal-overlay').style.display = 'flex';
+}
+
+function openEditModal(id) {
+  editingId = id;
+  const card = cards.find(c => c.id === id);
+  if (!card) return;
+  document.getElementById('modal-title').textContent = '编辑账单';
+  FIELDS.forEach(f => { document.getElementById('f-' + f).value = card[f] ?? ''; });
+  document.getElementById('modal-overlay').style.display = 'flex';
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').style.display = 'none';
+  editingId = null;
+}
+
+async function saveCard() {
+  const btn = document.getElementById('modal-save-btn');
+  btn.disabled = true; btn.textContent = '保存中…';
+  const data = {};
+  FIELDS.forEach(f => {
+    const v = document.getElementById('f-' + f).value.trim();
+    if (['statementAmount','minPayment','creditLimit','usedAmount','availableAmount','unbilledAmount'].includes(f)) {
+      data[f] = v !== '' ? parseFloat(v) : null;
+    } else {
+      data[f] = v || null;
+    }
+  });
+  try {
+    if (editingId) {
+      const updated = await api('/api/cards/' + editingId, 'PUT', data);
+      const idx = cards.findIndex(c => c.id === editingId);
+      if (idx >= 0) cards[idx] = updated;
+    } else {
+      const card = await api('/api/cards', 'POST', data);
+      cards.push(card);
+    }
+    renderTable(editingId || data.id);
+    renderStats();
+    closeModal();
+    toast(editingId ? '已更新' : '已添加', 'ok');
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '保存';
+  }
+}
+
+async function deleteCard(id) {
+  if (!confirm('确认删除这张卡的账单数据？')) return;
+  try {
+    await api('/api/cards/' + id, 'DELETE');
+    cards = cards.filter(c => c.id !== id);
+    renderTable();
+    renderStats();
+    toast('已删除', 'ok');
+  } catch(e) {
+    toast(e.message, 'err');
+  }
+}
+
+// ── TG 推送 ──────────────────────────────────────────────────────────────────
+async function triggerPush() {
+  const btn = document.getElementById('push-btn');
+  btn.disabled = true; btn.textContent = '发送中…';
+  try {
+    await api('/api/push', 'POST');
+    toast('TG 提醒已发送', 'ok');
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = '📬 发送TG提醒';
+  }
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast-item toast-${type}`;
+  el.textContent = msg;
+  document.getElementById('toast').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── XSS 防护 ─────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
