@@ -5,7 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 # KV 命名空间 - 部署前请将 id 替换为你的实际 KV ID
 kv_namespaces = [
-  { binding = "CREDIT_CARD_KV", id = "YOUR_KV_NAMESPACE_ID_HERE" }
+  { binding = "CREDIT_CARD_KV", id = "a8b09b588ccb44ed87d250e95b3d08be" }
 ]
 
 # Cloudflare AI 绑定
