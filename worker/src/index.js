@@ -31,6 +31,55 @@ function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+// ─── 银行名称标准化 ────────────────────────────────────────────────────────
+const BANK_ALIASES = {
+  '工商银行': ['工商','ICBC','icbc','工行'],
+  '建设银行': ['建设','CCB','ccb','建行'],
+  '招商银行': ['招商','CMB','cmb','招行'],
+  '浦发银行': ['浦发','SPDB','spdb','SPD','浦发银行信用卡','SPDBCCC'],
+  '中国银行': ['中行','BOC','boc'],
+  '农业银行': ['农行','ABC','农业'],
+  '交通银行': ['交行','BOCOM','交通'],
+  '民生银行': ['民生','CMBC'],
+  '光大银行': ['光大','CEB'],
+  '广发银行': ['广发','GDB','CGB'],
+  '平安银行': ['平安','PAB'],
+  '兴业银行': ['兴业','CIB'],
+  '华夏银行': ['华夏','HXB'],
+  '北京银行': ['北京银行','BOB'],
+  '中信银行': ['中信','CITIC'],
+  '邮储银行': ['邮储','PSBC'],
+};
+
+function normalizeBankName(raw) {
+  if (!raw) return raw;
+  const s = raw.trim();
+  // 已经是标准名
+  for (const std of Object.keys(BANK_ALIASES)) {
+    if (s === std || s.includes(std)) return std;
+  }
+  // 匹配别名
+  for (const [std, aliases] of Object.entries(BANK_ALIASES)) {
+    if (aliases.some(a => s.toUpperCase().includes(a.toUpperCase()))) return std;
+  }
+  return s;
+}
+
+// 标准化日期：统一输出 MM-DD，兼容各种输入
+function normalizeDate(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  // YYYY-MM-DD 或 YYYY/MM/DD
+  let m = s.match(/^\d{4}[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+  // MM-DD 或 MM/DD
+  m = s.match(/^(\d{1,2})[-/](\d{1,2})$/);
+  if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+  // 已经是正确格式
+  if (/^\d{2}-\d{2}$/.test(s)) return s;
+  return s;
+}
+
 // ─── KV 操作 ───────────────────────────────────────────────────────────────
 
 async function getCards(env) {
@@ -132,25 +181,22 @@ function extractEmailText(raw) {
 async function parseEmailWithAI(rawEmailText, env) {
   const emailText = extractEmailText(rawEmailText);
 
-  const prompt = `你是信用卡账单解析专家。从以下邮件中提取信用卡账单信息，以 JSON 格式返回，不要有任何多余文字或 markdown：
+  const prompt = `你是信用卡账单解析专家。从以下邮件中提取信用卡账单信息，严格以JSON格式返回，不要有任何多余文字或markdown代码块。
 
-{
-  "bankName": "银行名称（如工商银行、建设银行）",
-  "cardLast4": "卡号后4位数字字符串",
-  "billingDate": "账单日，格式 MM-DD",
-  "paymentDueDate": "还款截止日，格式 MM-DD",
-  "statementAmount": 本期账单金额数字,
-  "minPayment": 最低还款额数字,
-  "creditLimit": 信用额度数字,
-  "usedAmount": 已用额度数字,
-  "availableAmount": 可用额度数字,
-  "unbilledAmount": 未出账单消费数字
-}
+规则：
+1. bankName 必须是标准中文银行名，如"工商银行"、"建设银行"、"招商银行"、"浦发银行"，不要缩写或英文
+2. billingDate 和 paymentDueDate 只要 MM-DD 格式，不要年份，例如 "03-25"
+3. 所有金额必须是正数（绝对值）
+4. 信用额度(creditLimit)：工行账单在表格最右列，格式如"10,000.00/RMB"；招行/建行通常有"信用额度"字样
+5. 工行账单"应还款额"就是statementAmount，"最低还款额"就是minPayment
 
-找不到的字段填 null。只返回 JSON。
+返回格式：
+{"bankName":"中文银行名","cardLast4":"4位数字","billingDate":"MM-DD","paymentDueDate":"MM-DD","statementAmount":数字,"minPayment":数字,"creditLimit":数字,"usedAmount":数字,"availableAmount":数字,"unbilledAmount":数字}
+
+找不到的字段填null。只返回JSON一行，不要换行不要注释。
 
 邮件内容：
-${emailText.slice(0, 4000)}`;
+${emailText.slice(0, 5000)}`;
 
   try {
     if (env.AI) {
@@ -163,14 +209,31 @@ ${emailText.slice(0, 4000)}`;
       // AI 没提取到金额字段时用正则补充
       if (!parsed.statementAmount && !parsed.availableAmount) {
         const regex = regexParse(emailText);
-        return { ...regex, ...Object.fromEntries(Object.entries(parsed).filter(([, v]) => v != null)) };
+        return normalizeCard({ ...regex, ...Object.fromEntries(Object.entries(parsed).filter(([, v]) => v != null)) });
       }
-      return parsed;
+      return normalizeCard(parsed);
     }
-    return regexParse(emailText);
+    return normalizeCard(regexParse(emailText));
   } catch {
-    return regexParse(emailText);
+    return normalizeCard(regexParse(emailText));
   }
+}
+
+// 标准化卡片数据：银行名、日期格式、金额正数
+function normalizeCard(card) {
+  if (!card) return card;
+  return {
+    ...card,
+    bankName:        normalizeBankName(card.bankName),
+    billingDate:     normalizeDate(card.billingDate),
+    paymentDueDate:  normalizeDate(card.paymentDueDate),
+    statementAmount: card.statementAmount != null ? Math.abs(card.statementAmount) : null,
+    minPayment:      card.minPayment      != null ? Math.abs(card.minPayment)      : null,
+    creditLimit:     card.creditLimit     != null ? Math.abs(card.creditLimit)     : null,
+    usedAmount:      card.usedAmount      != null ? Math.abs(card.usedAmount)      : null,
+    availableAmount: card.availableAmount != null ? Math.abs(card.availableAmount) : null,
+    unbilledAmount:  card.unbilledAmount  != null ? Math.abs(card.unbilledAmount)  : null,
+  };
 }
 
 // 正则兜底解析
