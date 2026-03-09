@@ -307,7 +307,7 @@ tfoot td{background:rgba(212,175,55,.07);border-top:1px solid var(--border2);bor
 <script>
 // ── 配置 ────────────────────────────────────────────────────────────────────
 // 部署后将此处替换为你的 Cloudflare Worker 域名
-const BASE_URL = 'https://card.kont.us.ci';
+const BASE_URL = 'https://YOUR_WORKER_NAME.YOUR_SUBDOMAIN.workers.dev';
 
 // ── 状态 ────────────────────────────────────────────────────────────────────
 let token = localStorage.getItem('ccm_token') || '';
@@ -391,11 +391,17 @@ const fmtShort = n => n != null ? '¥' + Number(n).toLocaleString('zh-CN', {maxi
 
 function daysUntil(mmdd) {
   if (!mmdd) return null;
+  const parts = mmdd.split('-');
+  if (parts.length < 2) return null;
+  // 兼容旧数据中可能存有年份的格式 YYYY-MM-DD → 取后两段
+  const [mm, dd] = parts.length === 3
+    ? [parseInt(parts[1]), parseInt(parts[2])]
+    : [parseInt(parts[0]), parseInt(parts[1])];
+  if (isNaN(mm) || isNaN(dd) || mm > 12 || mm < 1) return null;
   const now = new Date();
-  const [mm, dd] = mmdd.split('-').map(Number);
-  if (isNaN(mm) || isNaN(dd)) return null;
   let due = new Date(now.getFullYear(), mm - 1, dd);
-  if (due < now && now.getDate() > dd) due.setMonth(due.getMonth() + 1);
+  // 如果今年这个日期已过，算明年
+  if (due < now) due.setFullYear(due.getFullYear() + 1);
   return Math.ceil((due - now) / 86400000);
 }
 
