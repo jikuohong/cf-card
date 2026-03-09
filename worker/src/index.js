@@ -200,7 +200,7 @@ ${emailText.slice(0, 5000)}`;
 
   try {
     if (env.AI) {
-      const response = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
+      const response = await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 512,
       });
