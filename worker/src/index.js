@@ -42,9 +42,96 @@ async function saveCards(env, cards) {
   await env.CREDIT_CARD_KV.put('cards', JSON.stringify(cards));
 }
 
+// ─── 邮件内容清洗 ──────────────────────────────────────────────────────────
+
+function decodeQuotedPrintable(str) {
+  return str
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+}
+
+function decodeBase64Body(str) {
+  try {
+    const clean = str.replace(/\s+/g, '');
+    const decoded = atob(clean);
+    const bytes = new Uint8Array([...decoded].map(c => c.charCodeAt(0)));
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch {
+    return str;
+  }
+}
+
+function stripHtml(html) {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?(p|div|tr|td|th|li|h[1-6])[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function extractEmailText(raw) {
+  let text = raw;
+
+  // 1. 解码 quoted-printable
+  if (/=[0-9A-Fa-f]{2}/.test(text)) {
+    text = decodeQuotedPrintable(text);
+  }
+
+  // 2. 处理 MIME multipart
+  const boundaryMatch = text.match(/boundary="?([^"\r\n;]+)"?/i);
+  if (boundaryMatch) {
+    const boundary = boundaryMatch[1];
+    const escaped = boundary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const sections = text.split(new RegExp('--' + escaped, 'g'));
+    const parts = [];
+    for (const section of sections) {
+      const isHtml  = /content-type:\s*text\/html/i.test(section);
+      const isPlain = /content-type:\s*text\/plain/i.test(section);
+      const isB64   = /content-transfer-encoding:\s*base64/i.test(section);
+      const isQP    = /content-transfer-encoding:\s*quoted-printable/i.test(section);
+      const bodyMatch = section.match(/\r?\n\r?\n([\s\S]+)/);
+      if (!bodyMatch) continue;
+      let body = bodyMatch[1].trim();
+      if (isB64) body = decodeBase64Body(body);
+      if (isQP)  body = decodeQuotedPrintable(body);
+      if (isHtml) body = stripHtml(body);
+      if (isHtml || isPlain) parts.push(body);
+    }
+    if (parts.length) return parts.join('\n\n');
+  }
+
+  // 3. 非 multipart
+  const headerEnd = text.indexOf('\n\n');
+  if (headerEnd > 0) {
+    const headers = text.slice(0, headerEnd);
+    let   body    = text.slice(headerEnd + 2);
+    const isB64   = /content-transfer-encoding:\s*base64/i.test(headers);
+    const isQP    = /content-transfer-encoding:\s*quoted-printable/i.test(headers);
+    const isHtml  = /content-type:\s*text\/html/i.test(headers);
+    if (isB64)  body = decodeBase64Body(body);
+    if (isQP)   body = decodeQuotedPrintable(body);
+    if (isHtml) body = stripHtml(body);
+    return headers + '\n\n' + body;
+  }
+
+  // 4. 兜底剥 HTML
+  if (/<html|<body|<div/i.test(text)) return stripHtml(text);
+  return text;
+}
+
 // ─── AI 解析邮件 ───────────────────────────────────────────────────────────
 
-async function parseEmailWithAI(emailText, env) {
+async function parseEmailWithAI(rawEmailText, env) {
+  const emailText = extractEmailText(rawEmailText);
+
   const prompt = `你是信用卡账单解析专家。从以下邮件中提取信用卡账单信息，以 JSON 格式返回，不要有任何多余文字或 markdown：
 
 {
@@ -52,31 +139,34 @@ async function parseEmailWithAI(emailText, env) {
   "cardLast4": "卡号后4位数字字符串",
   "billingDate": "账单日，格式 MM-DD",
   "paymentDueDate": "还款截止日，格式 MM-DD",
-  "statementAmount": 本期账单金额（纯数字），
-  "minPayment": 最低还款额（纯数字），
-  "creditLimit": 信用额度（纯数字），
-  "usedAmount": 已用额度（纯数字），
-  "availableAmount": 可用额度（纯数字），
-  "unbilledAmount": 未出账单消费（纯数字）
+  "statementAmount": 本期账单金额数字,
+  "minPayment": 最低还款额数字,
+  "creditLimit": 信用额度数字,
+  "usedAmount": 已用额度数字,
+  "availableAmount": 可用额度数字,
+  "unbilledAmount": 未出账单消费数字
 }
 
 找不到的字段填 null。只返回 JSON。
 
 邮件内容：
-${emailText.slice(0, 3000)}`;
+${emailText.slice(0, 4000)}`;
 
   try {
-    // 优先使用 Cloudflare AI
     if (env.AI) {
       const response = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 512,
       });
-      const text = response.response || '';
-      return JSON.parse(text.replace(/```json|```/g, '').trim());
+      const aiText = response.response || '';
+      const parsed = JSON.parse(aiText.replace(/```json|```/g, '').trim());
+      // AI 没提取到金额字段时用正则补充
+      if (!parsed.statementAmount && !parsed.availableAmount) {
+        const regex = regexParse(emailText);
+        return { ...regex, ...Object.fromEntries(Object.entries(parsed).filter(([, v]) => v != null)) };
+      }
+      return parsed;
     }
-
-    // 降级：正则兜底解析
     return regexParse(emailText);
   } catch {
     return regexParse(emailText);
@@ -85,29 +175,70 @@ ${emailText.slice(0, 3000)}`;
 
 // 正则兜底解析
 function regexParse(text) {
-  const num = (pattern) => {
-    const m = text.match(pattern);
-    return m ? parseFloat(m[1].replace(/,/g, '')) : null;
+  const num = (patterns) => {
+    for (const p of (Array.isArray(patterns) ? patterns : [patterns])) {
+      const m = text.match(p);
+      if (m) return parseFloat(m[1].replace(/,/g, ''));
+    }
+    return null;
   };
-  const str = (pattern) => {
-    const m = text.match(pattern);
-    return m ? m[1].trim() : null;
+  const str = (patterns) => {
+    for (const p of (Array.isArray(patterns) ? patterns : [patterns])) {
+      const m = text.match(p);
+      if (m) return m[1].trim();
+    }
+    return null;
   };
 
-  const banks = ['工商银行','建设银行','招商银行','浦发银行','中国银行','农业银行','交通银行','民生银行','光大银行','广发银行','平安银行','兴业银行','华夏银行','北京银行'];
+  const banks = ['工商银行','建设银行','招商银行','浦发银行','中国银行','农业银行','交通银行','民生银行','光大银行','广发银行','平安银行','兴业银行','华夏银行','北京银行','中信银行'];
   const bankName = banks.find(b => text.includes(b)) || null;
+
+  // 账单日
+  const billingRaw = str([
+    /账单日[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/,
+    /账单日[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
+  ]);
+  const billingDate = (() => {
+    const m = text.match(/账单日[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/);
+    if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+    const m2 = text.match(/账单日[：:]\s*(\d{1,2})[月/-](\d{1,2})/);
+    if (m2) return m2[1].padStart(2,'0') + '-' + m2[2].padStart(2,'0');
+    return null;
+  })();
+
+  // 还款截止日
+  const paymentDueDate = (() => {
+    const patterns = [
+      /(?:还款截止日|最后还款日|到期还款日|还款到期日)[：:]\s*\d{4}年(\d{1,2})月(\d{1,2})日/,
+      /(?:还款截止日|最后还款日|到期还款日)[：:]\s*(\d{1,2})[月/-](\d{1,2})/,
+    ];
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (m) return m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+    }
+    return null;
+  })();
 
   return {
     bankName,
-    cardLast4: str(/[（(]尾号\s*(\d{4})[）)]/),
-    billingDate: str(/账单日[：:]\s*\d{4}年(\d{1,2}月\d{1,2}日)/)?.replace('月','-').replace('日','') || null,
-    paymentDueDate: str(/(?:还款截止日|最后还款日|到期还款日)[：:]\s*\d{4}年(\d{1,2}月\d{1,2}日)/)?.replace('月','-').replace('日','') || null,
-    statementAmount: num(/(?:本期账单金额|本期应还金额|应还金额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
+    cardLast4: str(/[（(](?:尾号|末四位)[：:\s]*(\d{4})[）)]/),
+    billingDate,
+    paymentDueDate,
+    statementAmount: num([
+      /(?:本期账单金额|本期应还金额|应还金额|账单金额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
+      /应还总额[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
+    ]),
     minPayment: num(/最低还款额?[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
-    creditLimit: num(/(?:信用额度|授信额度)[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
-    usedAmount: num(/(?:已用额度|本期消费)[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
+    creditLimit: num([
+      /(?:信用额度|授信额度|信用限额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
+    ]),
+    usedAmount: num([
+      /(?:已用额度|本期消费|消费总额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
+    ]),
     availableAmount: num(/可用额度[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
-    unbilledAmount: num(/(?:未出账单消费|未出账消费|未入账消费)[：:]\s*[¥￥]?([\d,]+\.?\d*)/),
+    unbilledAmount: num([
+      /(?:未出账单消费|未出账消费|未入账消费|未出账金额)[：:]\s*[¥￥]?([\d,]+\.?\d*)/,
+    ]),
   };
 }
 
@@ -117,7 +248,6 @@ async function handleEmailEvent(message, env) {
   const from = message.from || '';
   const subject = message.headers?.get?.('subject') || '';
 
-  // 读取原始邮件内容
   let rawEmail = `From: ${from}\nSubject: ${subject}\n\n`;
   try {
     const reader = message.raw.getReader();
@@ -133,20 +263,19 @@ async function handleEmailEvent(message, env) {
     console.error('Read email error:', e);
   }
 
-  // 过滤：只处理看起来像账单的邮件
-  const billKeywords = ['账单','还款','信用卡','Credit','Statement','Bill'];
+  const billKeywords = ['账单','还款','信用卡','Credit','Statement','Bill','结单'];
   const isBill = billKeywords.some(k => rawEmail.includes(k) || subject.includes(k));
   if (!isBill) return;
 
-  // AI 解析
   const parsed = await parseEmailWithAI(rawEmail, env);
-  if (!parsed || !parsed.bankName) return;
+  if (!parsed || !parsed.bankName) {
+    // 即使解析失败也通知，方便排查
+    await sendTelegram(`⚠️ 收到疑似账单邮件但解析失败\n来自：${from}\n主题：${subject}`, env);
+    return;
+  }
 
-  // 存入 KV
   const cards = await getCards(env);
-  const existing = cards.findIndex(
-    c => c.cardLast4 === parsed.cardLast4 && c.bankName === parsed.bankName
-  );
+  const existing = cards.findIndex(c => c.cardLast4 === parsed.cardLast4 && c.bankName === parsed.bankName);
   const card = {
     id: existing >= 0 ? cards[existing].id : genId(),
     ...parsed,
@@ -155,19 +284,14 @@ async function handleEmailEvent(message, env) {
     source: 'email',
   };
 
-  if (existing >= 0) {
-    cards[existing] = card;
-  } else {
-    cards.push(card);
-  }
+  if (existing >= 0) { cards[existing] = card; } else { cards.push(card); }
   await saveCards(env, cards);
 
-  // 即时 TG 通知
   const msg = `📬 *收到新账单*\n\n` +
-    `🏦 ${card.bankName}（${card.cardLast4 ? '····' + card.cardLast4 : ''}）\n` +
+    `🏦 ${card.bankName}${card.cardLast4 ? '（····' + card.cardLast4 + '）' : ''}\n` +
     `📅 还款截止：${card.paymentDueDate || '未知'}\n` +
-    `💰 本期账单：¥${card.statementAmount?.toLocaleString() || '—'}\n` +
-    `💳 可用额度：¥${card.availableAmount?.toLocaleString() || '—'}`;
+    `💰 本期账单：${card.statementAmount ? '¥' + card.statementAmount.toLocaleString() : '—'}\n` +
+    `💳 可用额度：${card.availableAmount ? '¥' + card.availableAmount.toLocaleString() : '—'}`;
   await sendTelegram(msg, env);
 }
 
@@ -178,21 +302,15 @@ async function sendTelegram(text, env) {
   await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: env.TG_CHAT_ID,
-      text,
-      parse_mode: 'Markdown',
-    }),
+    body: JSON.stringify({ chat_id: env.TG_CHAT_ID, text, parse_mode: 'Markdown' }),
   });
 }
 
-// 计算距今天数（今天=0，负数=已逾期）
 function daysUntil(mmdd) {
   if (!mmdd) return null;
   const now = new Date();
   const [mm, dd] = mmdd.split('-').map(Number);
   let due = new Date(now.getFullYear(), mm - 1, dd);
-  // 如果这个月的日期已过，算下个月
   if (due < now && now.getDate() > dd) due.setMonth(due.getMonth() + 1);
   return Math.ceil((due - now) / 86400000);
 }
@@ -203,7 +321,6 @@ async function sendDailyReminders(env) {
 
   const today = new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
   let lines = [`📊 *信用卡还款日报* — ${today}\n`];
-
   const urgent = [], normal = [], overdue = [];
 
   for (const c of cards) {
@@ -211,30 +328,22 @@ async function sendDailyReminders(env) {
     const name = `${c.bankName || ''}${c.cardLast4 ? '····' + c.cardLast4 : ''}`;
     const amount = c.statementAmount ? `¥${c.statementAmount.toLocaleString()}` : '—';
     const dueStr = c.paymentDueDate || '—';
-
-    if (days === null) {
-      normal.push({ name, amount, dueStr, days });
-    } else if (days < 0) {
-      overdue.push({ name, amount, dueStr, days });
-    } else if (days <= 3) {
-      urgent.push({ name, amount, dueStr, days });
-    } else {
-      normal.push({ name, amount, dueStr, days });
-    }
+    if (days === null)   normal.push({ name, amount, dueStr, days });
+    else if (days < 0)   overdue.push({ name, amount, dueStr, days });
+    else if (days <= 3)  urgent.push({ name, amount, dueStr, days });
+    else                 normal.push({ name, amount, dueStr, days });
   }
 
   if (overdue.length) {
     lines.push('🔴 *已逾期*');
-    overdue.forEach(c => lines.push(`  • ${c.name}｜${c.amount}｜还款日 ${c.dueStr}（逾期 ${Math.abs(c.days)} 天）`));
+    overdue.forEach(c => lines.push(`  • ${c.name}｜${c.amount}｜逾期 ${Math.abs(c.days)} 天`));
     lines.push('');
   }
-
   if (urgent.length) {
     lines.push('🟠 *紧急提醒（3天内到期）*');
     urgent.forEach(c => lines.push(`  • ${c.name}｜${c.amount}｜还剩 ${c.days} 天`));
     lines.push('');
   }
-
   if (normal.length) {
     lines.push('🟢 *正常账单*');
     normal.forEach(c => {
@@ -257,9 +366,7 @@ async function sendDailyReminders(env) {
 async function checkAuth(request, env) {
   const auth = request.headers.get('Authorization') || '';
   if (!auth.startsWith('Bearer ')) return { ok: false };
-
   const token = auth.slice(7);
-  // 验证 token 是否在 KV 中有效
   const stored = await env.CREDIT_CARD_KV.get(`session:${token}`);
   return { ok: !!stored };
 }
@@ -270,22 +377,19 @@ async function handleLogin(request, env) {
     return jsonRes({ error: '密码错误' }, 401);
   }
   const token = genId() + genId();
-  // session 有效期 7 天
   await env.CREDIT_CARD_KV.put(`session:${token}`, '1', { expirationTtl: 604800 });
   return jsonRes({ token });
 }
 
-// ─── API 路由处理 ──────────────────────────────────────────────────────────
+// ─── API 路由 ──────────────────────────────────────────────────────────────
 
 async function apiGetCards(env) {
-  const cards = await getCards(env);
-  return jsonRes(cards);
+  return jsonRes(await getCards(env));
 }
 
 async function apiAddCard(request, env) {
   const body = await request.json().catch(() => null);
   if (!body) return jsonRes({ error: '无效数据' }, 400);
-
   const cards = await getCards(env);
   const card = { id: genId(), ...body, updatedAt: new Date().toISOString(), source: 'manual' };
   cards.push(card);
@@ -296,11 +400,9 @@ async function apiAddCard(request, env) {
 async function apiUpdateCard(request, env, id) {
   const body = await request.json().catch(() => null);
   if (!body) return jsonRes({ error: '无效数据' }, 400);
-
   const cards = await getCards(env);
   const idx = cards.findIndex(c => c.id === id);
   if (idx < 0) return jsonRes({ error: '卡片不存在' }, 404);
-
   cards[idx] = { ...cards[idx], ...body, id, updatedAt: new Date().toISOString() };
   await saveCards(env, cards);
   return jsonRes(cards[idx]);
@@ -317,21 +419,11 @@ async function apiDeleteCard(env, id) {
 async function apiParseEmail(request, env) {
   const { emailText } = await request.json().catch(() => ({}));
   if (!emailText) return jsonRes({ error: '请提供邮件内容' }, 400);
-
   const parsed = await parseEmailWithAI(emailText, env);
   if (!parsed || !parsed.bankName) return jsonRes({ error: '无法识别账单信息' }, 422);
-
   const cards = await getCards(env);
-  const existing = cards.findIndex(
-    c => c.cardLast4 === parsed.cardLast4 && c.bankName === parsed.bankName
-  );
-  const card = {
-    id: existing >= 0 ? cards[existing].id : genId(),
-    ...parsed,
-    updatedAt: new Date().toISOString(),
-    source: 'manual',
-  };
-
+  const existing = cards.findIndex(c => c.cardLast4 === parsed.cardLast4 && c.bankName === parsed.bankName);
+  const card = { id: existing >= 0 ? cards[existing].id : genId(), ...parsed, updatedAt: new Date().toISOString(), source: 'manual' };
   if (existing >= 0) { cards[existing] = card; } else { cards.push(card); }
   await saveCards(env, cards);
   return jsonRes(card);
@@ -345,24 +437,17 @@ async function apiTriggerPush(env) {
 // ─── 主入口 ────────────────────────────────────────────────────────────────
 
 export default {
-  // 邮件接收处理
   async email(message, env, ctx) {
     ctx.waitUntil(handleEmailEvent(message, env));
   },
 
-  // HTTP 请求处理
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return corsRes();
-
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // 登录
-    if (path === '/api/login' && request.method === 'POST') {
-      return handleLogin(request, env);
-    }
+    if (path === '/api/login' && request.method === 'POST') return handleLogin(request, env);
 
-    // 其他接口需要鉴权
     const auth = await checkAuth(request, env);
     if (!auth.ok) return jsonRes({ error: '未授权，请先登录' }, 401);
 
@@ -370,26 +455,18 @@ export default {
       if (request.method === 'GET')  return apiGetCards(env);
       if (request.method === 'POST') return apiAddCard(request, env);
     }
-
     const cardMatch = path.match(/^\/api\/cards\/(.+)$/);
     if (cardMatch) {
       const id = cardMatch[1];
       if (request.method === 'PUT')    return apiUpdateCard(request, env, id);
       if (request.method === 'DELETE') return apiDeleteCard(env, id);
     }
-
-    if (path === '/api/parse' && request.method === 'POST') {
-      return apiParseEmail(request, env);
-    }
-
-    if (path === '/api/push' && request.method === 'POST') {
-      return apiTriggerPush(env);
-    }
+    if (path === '/api/parse' && request.method === 'POST') return apiParseEmail(request, env);
+    if (path === '/api/push'  && request.method === 'POST') return apiTriggerPush(env);
 
     return jsonRes({ error: 'Not Found' }, 404);
   },
 
-  // Cron 定时触发
   async scheduled(event, env, ctx) {
     ctx.waitUntil(sendDailyReminders(env));
   },
